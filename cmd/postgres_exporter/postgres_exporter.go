@@ -34,6 +34,7 @@ var (
 	listenAddress          = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9187").Envar("PG_EXPORTER_WEB_LISTEN_ADDRESS").String()
 	metricPath             = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").Envar("PG_EXPORTER_WEB_TELEMETRY_PATH").String()
 	disableDefaultMetrics  = kingpin.Flag("disable-default-metrics", "Do not include default metrics.").Default("false").Envar("PG_EXPORTER_DISABLE_DEFAULT_METRICS").Bool()
+	enableServerLabel     = kingpin.Flag("enable-server-label", "Include server label in metrics.").Default("false").Envar("PG_EXPORTER_ENABLE_SERVER_LABEL").Bool()
 	disableSettingsMetrics = kingpin.Flag("disable-settings-metrics", "Do not include pg_settings metrics.").Default("false").Envar("PG_EXPORTER_DISABLE_SETTINGS_METRICS").Bool()
 	autoDiscoverDatabases  = kingpin.Flag("auto-discover-databases", "Whether to discover the databases on a server dynamically.").Default("false").Envar("PG_EXPORTER_AUTO_DISCOVER_DATABASES").Bool()
 	queriesPath            = kingpin.Flag("extend.query-path", "Path to custom queries to run.").Default("").Envar("PG_EXPORTER_EXTEND_QUERY_PATH").String()
@@ -798,7 +799,7 @@ func ServerWithLabels(labels prometheus.Labels) ServerOpt {
 }
 
 // NewServer establishes a new connection using DSN.
-func NewServer(dsn string, opts ...ServerOpt) (*Server, error) {
+func NewServer(dsn string, serverLabel bool, opts ...ServerOpt) (*Server, error) {
 	fingerprint, err := parseFingerprint(dsn)
 	if err != nil {
 		return nil, err
@@ -820,6 +821,10 @@ func NewServer(dsn string, opts ...ServerOpt) (*Server, error) {
 			serverLabelName: fingerprint,
 		},
 		metricCache: make(map[string]cachedMetrics),
+	}
+
+	if !serverLabel {
+		delete(s.labels, serverLabelName)
 	}
 
 	for _, opt := range opts {
@@ -887,7 +892,7 @@ func NewServers(opts ...ServerOpt) *Servers {
 }
 
 // GetServer returns established connection from a collection.
-func (s *Servers) GetServer(dsn string) (*Server, error) {
+func (s *Servers) GetServer(dsn string, serverLabel bool) (*Server, error) {
 	s.m.Lock()
 	defer s.m.Unlock()
 	var err error
@@ -901,7 +906,7 @@ func (s *Servers) GetServer(dsn string) (*Server, error) {
 		}
 		server, ok = s.servers[dsn]
 		if !ok {
-			server, err = NewServer(dsn, s.opts...)
+			server, err = NewServer(dsn, serverLabel, s.opts...)
 			if err != nil {
 				time.Sleep(time.Duration(errCount) * time.Second)
 				continue
@@ -935,7 +940,7 @@ type Exporter struct {
 	// only, since it just points to the global.
 	builtinMetricMaps map[string]intermediateMetricMap
 
-	disableDefaultMetrics, disableSettingsMetrics, autoDiscoverDatabases bool
+	disableDefaultMetrics, disableSettingsMetrics, autoDiscoverDatabases, enableServerLabel bool
 
 	excludeDatabases []string
 	dsn              []string
@@ -959,6 +964,13 @@ type ExporterOpt func(*Exporter)
 func DisableDefaultMetrics(b bool) ExporterOpt {
 	return func(e *Exporter) {
 		e.disableDefaultMetrics = b
+	}
+}
+
+// EnableServerLabel configures default metrics export.
+func EnableServerLabel(b bool) ExporterOpt {
+	return func(e *Exporter) {
+		e.enableServerLabel = b
 	}
 }
 
@@ -1433,7 +1445,7 @@ func (e *Exporter) discoverDatabaseDSNs() []string {
 		}
 
 		dsns[dsn] = struct{}{}
-		server, err := e.servers.GetServer(dsn)
+		server, err := e.servers.GetServer(dsn,e.enableServerLabel)
 		if err != nil {
 			log.Errorf("Error opening connection to database (%s): %v", loggableDSN(dsn), err)
 			continue
@@ -1466,7 +1478,8 @@ func (e *Exporter) discoverDatabaseDSNs() []string {
 }
 
 func (e *Exporter) scrapeDSN(ch chan<- prometheus.Metric, dsn string) error {
-	server, err := e.servers.GetServer(dsn)
+	server, err := e.servers.GetServer(dsn, e.enableServerLabel)
+
 	if err != nil {
 		return &ErrorConnectToServer{fmt.Sprintf("Error opening connection to database (%s): %s", loggableDSN(dsn), err.Error())}
 	}
@@ -1555,6 +1568,7 @@ func main() {
 
 	exporter := NewExporter(dsn,
 		DisableDefaultMetrics(*disableDefaultMetrics),
+		EnableServerLabel(*enableServerLabel),
 		DisableSettingsMetrics(*disableSettingsMetrics),
 		AutoDiscoverDatabases(*autoDiscoverDatabases),
 		WithUserQueriesPath(*queriesPath),
