@@ -970,7 +970,7 @@ func (s *Servers) GetServer(dsn string, serverLabel bool) (*Server, error) {
 		}
 		server, ok = s.servers[dsn]
 		if !ok {
-			server, err = NewServer(dsn, , serverLabel, s.opts...)
+			server, err = NewServer(dsn, serverLabel, s.opts...)
 			if err != nil {
 				time.Sleep(time.Duration(errCount) * time.Second)
 				continue
@@ -1004,7 +1004,7 @@ type Exporter struct {
 	// only, since it just points to the global.
 	builtinMetricMaps map[string]intermediateMetricMap
 
-	disableDefaultMetrics, disableSettingsMetrics, autoDiscoverDatabases bool, enableServerLabel bool
+	disableDefaultMetrics, disableSettingsMetrics, autoDiscoverDatabases, enableServerLabel bool
 
 	excludeDatabases []string
 	dsn              []string
